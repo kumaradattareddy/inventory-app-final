@@ -5,14 +5,25 @@ import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { ArrowUpDown } from "lucide-react"
 
+export type PartyRole = 'customer' | 'supplier' | 'both' | 'other';
+
 export type Party = {
-  id: string
-  name: string
-  role: string
-  phone: string | null
-  total_purchases: number
-  total_sales: number
-}
+  id: string;
+  name: string;
+  role: PartyRole;
+
+  // ⬇️ this is the signed starting balance (Dr = +, Cr = -)
+  opening_balance: number;
+
+  // Optional details
+  phone?: string | null;
+  address?: string | null;
+  created_at?: string;
+
+  // From get_parties_with_totals()
+  total_purchases: number;
+  total_sales: number;
+};
 
 export const columns: ColumnDef<Party>[] = [
   {
