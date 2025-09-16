@@ -93,7 +93,7 @@ export default function SalesPage() {
     const watchedPaymentAmount = useWatch({ control: form.control, name: "payment.amount" });
     const subtotal = React.useMemo(() => watchedItems.reduce((acc, item) => acc + ((item.qty || 0) * (item.price_per_unit || 0)), 0), [watchedItems]);
     const partyDetails = React.useMemo(() => parties?.find(p => p.id === watchedPartyId), [parties, watchedPartyId]);
-    const openingBalance = partyDetails?.opening_balance || 0;
+    const openingBalance = 0;
     const finalBalance = subtotal + openingBalance - (watchedPaymentAmount || 0);
 
     const mainMutation = useMutation({
