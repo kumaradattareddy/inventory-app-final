@@ -1,3 +1,4 @@
+// File: app/payments/page.tsx (FINAL CORRECTED VERSION)
 'use client'
 
 import * as React from "react"
@@ -7,7 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { z } from "zod"
 import { addPaymentSchema, addPartySchema } from "@/lib/schemas"
 import { useToast } from "@/hooks/use-toast"
-import { Party } from "@/app/parties/columns"
+import { Party } from "@/lib/types"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -19,7 +20,6 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
 
-// --- Data Fetching & Mutation ---
 async function getParties(): Promise<Party[]> {
     const res = await fetch('/api/parties');
     if (!res.ok) throw new Error('Failed to fetch parties');
@@ -39,21 +39,19 @@ const createPayment = async (values: z.infer<typeof addPaymentSchema>) => {
     return res.json();
 }
 
-// Define a type for our new party form inside the dialog
 type NewPartyFormValues = z.infer<typeof addPartySchema>;
 
 export default function PaymentsPage() {
     const queryClient = useQueryClient();
     const { toast } = useToast();
     
-    // ✨ State to manage the "Create New Party" dialog
     const [newPartyName, setNewPartyName] = React.useState<string | null>(null);
     const newPartyForm = useForm<NewPartyFormValues>({
         resolver: zodResolver(addPartySchema),
         defaultValues: { name: "", role: "other", opening_balance: 0 },
     });
 
-    const { data: parties, isLoading: isLoadingParties, refetch: refetchParties } = useQuery({ queryKey: ['parties'], queryFn: getParties });
+    const { data: parties, isLoading: isLoadingParties } = useQuery({ queryKey: ['parties'], queryFn: getParties });
     
     const mainForm = useForm<z.infer<typeof addPaymentSchema>>({
         resolver: zodResolver(addPaymentSchema),
@@ -70,18 +68,20 @@ export default function PaymentsPage() {
         onError: (error) => toast({ title: "Error", description: error.message, variant: "destructive" })
     });
 
-    // ✨ Upgraded mutation to accept all party details from the dialog form
     const partyCreateMutation = useMutation({
         mutationFn: (partyData: NewPartyFormValues) => fetch('/api/parties', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(partyData),
         }).then(res => res.json()),
-        onSuccess: (newParty) => {
+        onSuccess: (newParty: Party) => {
             toast({ title: "Success!", description: `Contact "${newParty.name}" created.` });
-            queryClient.invalidateQueries({ queryKey: ['parties'] });
+            queryClient.setQueryData(['parties'], (oldData: Party[] | undefined) => {
+                const enhancedNewParty = { ...newParty, total_purchases: 0, total_sales: 0, balance: newParty.opening_balance };
+                return oldData ? [...oldData, enhancedNewParty] : [enhancedNewParty];
+            });
             mainForm.setValue('party_id', newParty.id);
-            setNewPartyName(null); // Close the dialog
+            setNewPartyName(null);
         },
         onError: (error) => toast({ title: "Error", description: `Failed to create contact: ${error.message}`, variant: "destructive" })
     });
@@ -91,7 +91,6 @@ export default function PaymentsPage() {
 
     const partyOptions = parties?.map(p => ({ value: p.id, label: p.name })) || [];
     
-    // When the "Create" button is clicked in the combobox, set the name and open the dialog
     const handleCreateNewParty = (name: string) => {
         newPartyForm.setValue("name", name);
         setNewPartyName(name);
@@ -152,7 +151,7 @@ export default function PaymentsPage() {
                 <Toaster />
             </div>
 
-            {/* ✨ The Dialog for creating a new party with full details */}
+            {/* ✨ THIS DIALOG IS NOW FULLY FEATURED ✨ */}
             <Dialog open={!!newPartyName} onOpenChange={(isOpen) => !isOpen && setNewPartyName(null)}>
                 <DialogContent>
                     <DialogHeader>
