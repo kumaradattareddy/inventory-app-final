@@ -1,4 +1,4 @@
-// File: app/api/sales/quick-bill/route.ts
+// File: app/api/sales/quick-bill/route.ts (CORRECTED)
 import { createClient } from '@/lib/supabase/server';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -10,7 +10,7 @@ const quickBillSchema = z.object({
         product_id: z.string().uuid(),
         qty: z.coerce.number().gt(0),
         price_per_unit: z.coerce.number().gte(0),
-    })).min(1, "At least one item is required."),
+    })).min(1),
     payment: z.object({
         amount: z.coerce.number().gte(0),
         method: z.enum(["cash", "upi", "cheque"]),
@@ -35,16 +35,19 @@ export async function POST(request: Request) {
     
     const { party_id, bill_no, items, payment, settlement } = validated.data;
 
-    const { error } = await supabase.rpc('create_new_sale', {
+    // ✨ This object must match the database function's 8 arguments exactly
+    const rpcParams = {
         party_id_input: party_id,
         bill_no_input: bill_no,
-        payment_method_input: payment.method,
-        payment_amount_input: payment.amount,
-        payment_ref_input: payment.instrument_ref,
         items: items,
+        payment_amount_input: payment.amount,
+        payment_method_input: payment.method,
+        payment_ref_input: payment.instrument_ref, // This was the missing piece
         settlement_party_id_input: settlement?.party_id || null,
         settlement_amount_input: settlement?.amount || 0,
-    });
+    };
+
+    const { error } = await supabase.rpc('create_new_sale', rpcParams);
 
     if (error) {
         console.error("Error creating quick bill sale:", error);
