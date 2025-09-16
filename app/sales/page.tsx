@@ -1,4 +1,4 @@
-// File: app/sales/page.tsx (Corrected Closing Tag)
+// File: app/sales/page.tsx (FINAL VERSION with improved validation)
 'use client'
 
 import * as React from "react"
@@ -38,10 +38,17 @@ const saleFormSchema = z.object({
         amount: z.coerce.number().gte(0).default(0),
     }).optional(),
 }).refine(data => {
-    const subtotal = data.items.reduce((acc, item) => acc + (item.qty * item.price_per_unit), 0);
-    return !data.settlement || data.settlement.amount <= subtotal;
+    if (data.settlement?.party_id && (data.settlement?.amount || 0) <= 0) {
+        return false;
+    }
+    return true;
 }, {
-    message: "Settlement amount cannot exceed the Subtotal of the sale.",
+    message: "Amount must be > 0 if recipient is selected.",
+    path: ["settlement", "amount"],
+}).refine(data => {
+    return !data.settlement || (data.settlement.amount || 0) <= data.payment.amount;
+}, {
+    message: "Settlement cannot exceed Amount Paid Now.",
     path: ["settlement", "amount"],
 });
 type SaleFormValues = z.infer<typeof saleFormSchema>;
@@ -77,10 +84,7 @@ export default function SalesPage() {
     
     const form = useForm<SaleFormValues>({
         resolver: zodResolver(saleFormSchema),
-        defaultValues: {
-            items: [{ product_id: "", qty: 1, price_per_unit: 0 }],
-            payment: { amount: 0, method: "cash" }
-        },
+        defaultValues: { items: [{ product_id: "", qty: 1, price_per_unit: 0 }], payment: { amount: 0, method: "cash" } },
     });
     
     const { fields, append, remove } = useFieldArray({ control: form.control, name: "items" });
@@ -89,7 +93,7 @@ export default function SalesPage() {
     const watchedPaymentAmount = useWatch({ control: form.control, name: "payment.amount" });
     const subtotal = React.useMemo(() => watchedItems.reduce((acc, item) => acc + ((item.qty || 0) * (item.price_per_unit || 0)), 0), [watchedItems]);
     const partyDetails = React.useMemo(() => parties?.find(p => p.id === watchedPartyId), [parties, watchedPartyId]);
-    const openingBalance = 0;
+    const openingBalance = partyDetails?.opening_balance || 0;
     const finalBalance = subtotal + openingBalance - (watchedPaymentAmount || 0);
 
     const mainMutation = useMutation({
@@ -108,10 +112,11 @@ export default function SalesPage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, role: 'customer' }),
         }).then(res => res.json()),
-        onSuccess: (newParty) => {
+        onSuccess: (newParty: Party) => {
             toast({ title: "Success!", description: `Customer "${newParty.name}" created.` });
             queryClient.setQueryData(['parties'], (oldData: Party[] | undefined) => {
-                return oldData ? [...oldData, newParty] : [newParty];
+                const enhancedNewParty = { ...newParty, total_purchases: 0, total_sales: 0 };
+                return oldData ? [...oldData, enhancedNewParty] : [enhancedNewParty];
             });
             form.setValue('party_id', newParty.id);
         },
@@ -124,10 +129,11 @@ export default function SalesPage() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, role: 'other' }),
         }).then(res => res.json()),
-        onSuccess: (newParty) => {
+        onSuccess: (newParty: Party) => {
             toast({ title: "Success!", description: `Recipient "${newParty.name}" created.` });
             queryClient.setQueryData(['parties'], (oldData: Party[] | undefined) => {
-                return oldData ? [...oldData, newParty] : [newParty];
+                const enhancedNewParty = { ...newParty, total_purchases: 0, total_sales: 0 };
+                return oldData ? [...oldData, enhancedNewParty] : [enhancedNewParty];
             });
             form.setValue('settlement.party_id', newParty.id);
         },
@@ -170,10 +176,7 @@ export default function SalesPage() {
                                 <CardContent className="space-y-4">
                                     <FormField control={form.control} name="payment.amount" render={({ field }) => ( <FormItem><FormLabel>Amount Paid Now</FormLabel><FormControl><Input type="number" step="0.01" {...field} /></FormControl><FormMessage /></FormItem> )} />
                                     <FormField control={form.control} name="payment.method" render={({ field }) => ( <FormItem><FormLabel>Method</FormLabel> <Select onValueChange={field.onChange} defaultValue={field.value}> <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl> <SelectContent><SelectItem value="cash">Cash</SelectItem><SelectItem value="upi">UPI</SelectItem><SelectItem value="cheque">Cheque</SelectItem></SelectContent> </Select> <FormMessage /></FormItem> )}/>
-                                    
-                                    {/* ✨ THIS IS THE CORRECTED LINE ✨ */}
                                     <FormField control={form.control} name="payment.instrument_ref" render={({ field }) => ( <FormItem><FormLabel>Payment Reference</FormLabel><FormControl><Input placeholder="e.g., UPI ID, Cheque No." {...field} /></FormControl><FormMessage /></FormItem> )}/>
-                                    
                                     {watchedPaymentAmount > 0 && (<div className="space-y-4 border-t pt-4">
                                         <h3 className="text-sm font-medium">Settle This Payment (Optional)</h3>
                                         <FormField control={form.control} name="settlement.party_id" render={({ field }) => (<FormItem><FormLabel>Recipient Name</FormLabel><CreatableCombobox options={settlementPartyOptions} onCreate={(name) => settlementPartyCreateMutation.mutate(name)} {...field} placeholder="Type or select a recipient..." /><FormMessage /></FormItem>)} />
