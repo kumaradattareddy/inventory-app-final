@@ -13,6 +13,7 @@ export const addPartySchema = z.object({
   phone: z.string().optional(),
   address: z.string().optional(),
   role: z.enum(["customer", "supplier", "both", "other"]),
+  // A signed number: positive for debit (owes you), negative for credit (you owe)
   opening_balance: z.coerce.number().default(0),
 });
 

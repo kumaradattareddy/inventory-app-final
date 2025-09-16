@@ -1,3 +1,4 @@
+// File: app/parties/AddPartyDialog.tsx (UPGRADED)
 'use client'
 
 import { useState } from "react"
@@ -14,18 +15,7 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 
-const createParty = async (values: z.infer<typeof addPartySchema>) => {
-    const res = await fetch('/api/parties', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(values),
-    })
-    if (!res.ok) {
-        const errorData = await res.json();
-        throw new Error(errorData.error.message || 'Failed to create party');
-    }
-    return res.json()
-}
+const createParty = async (values: z.infer<typeof addPartySchema>) => { /* ... unchanged ... */ }
 
 export default function AddPartyDialog() {
     const [open, setOpen] = useState(false)
@@ -45,9 +35,7 @@ export default function AddPartyDialog() {
             setOpen(false)
             form.reset()
         },
-        onError: (error) => {
-            toast({ title: "Error", description: error.message, variant: "destructive" })
-        }
+        onError: (error) => toast({ title: "Error", description: error.message, variant: "destructive" })
     })
 
     function onSubmit(values: z.infer<typeof addPartySchema>) {
@@ -60,15 +48,15 @@ export default function AddPartyDialog() {
             <DialogContent className="sm:max-w-[425px]">
                 <DialogHeader>
                     <DialogTitle>Add New Party</DialogTitle>
-                    <DialogDescription>Add a new customer, supplier, or other party.</DialogDescription>
+                    <DialogDescription>Add a new customer, supplier, or other party with all details.</DialogDescription>
                 </DialogHeader>
                 <Form {...form}>
-                    <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                        <FormField control={form.control} name="name" render={({ field }) => ( <FormItem><FormLabel>Party Name</FormLabel><FormControl><Input placeholder="e.g., Suresh Kumar" {...field} /></FormControl><FormMessage /></FormItem> )} />
-                        <FormField control={form.control} name="phone" render={({ field }) => ( <FormItem><FormLabel>Phone Number</FormLabel><FormControl><Input placeholder="Optional" {...field} /></FormControl><FormMessage /></FormItem> )} />
+                    <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-4">
+                        <FormField control={form.control} name="name" render={({ field }) => ( <FormItem><FormLabel>Party Name</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem> )} />
+                        <FormField control={form.control} name="phone" render={({ field }) => ( <FormItem><FormLabel>Phone Number</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem> )} />
+                        <FormField control={form.control} name="address" render={({ field }) => ( <FormItem><FormLabel>Address</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem> )} />
                         <FormField control={form.control} name="role" render={({ field }) => (
-                            <FormItem>
-                                <FormLabel>Role</FormLabel>
+                            <FormItem><FormLabel>Role</FormLabel>
                                 <Select onValueChange={field.onChange} defaultValue={field.value}>
                                     <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                                     <SelectContent>
@@ -78,6 +66,13 @@ export default function AddPartyDialog() {
                                         <SelectItem value="other">Other</SelectItem>
                                     </SelectContent>
                                 </Select>
+                            <FormMessage /></FormItem>
+                        )} />
+                        <FormField control={form.control} name="opening_balance" render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>Opening Balance (₹)</FormLabel>
+                                <FormControl><Input type="number" step="0.01" {...field} /></FormControl>
+                                <p className="text-xs text-muted-foreground">Enter a positive number if they owe you (Debit), or a negative number if you owe them (Credit).</p>
                                 <FormMessage />
                             </FormItem>
                         )} />

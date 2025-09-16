@@ -1,4 +1,3 @@
-// File: app/sales/page.tsx (FINAL VERSION with improved validation)
 'use client'
 
 import * as React from "react"
@@ -9,7 +8,8 @@ import { z } from "zod"
 import { useToast } from "@/hooks/use-toast"
 import { Party } from "@/app/parties/columns"
 import { Product } from "@/app/products/columns"
-import { PlusCircle, Trash2 } from "lucide-react"
+import { CalendarIcon, PlusCircle, Trash2 } from "lucide-react"
+import { format } from "date-fns"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
@@ -19,10 +19,14 @@ import { Toaster } from "@/components/ui/toaster"
 import { CreatableCombobox } from "@/components/ui/CreatableCombobox"
 import { SearchableCombobox } from "@/components/ui/SearchableCombobox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { Calendar } from "@/components/ui/calendar"
+import { cn } from "@/lib/utils"
 
 const saleFormSchema = z.object({
     party_id: z.string().uuid("Please select a customer."),
     bill_no: z.string().optional(),
+    created_at: z.date(),
     items: z.array(z.object({
         product_id: z.string().uuid("Please select a product."),
         qty: z.coerce.number().gt(0, "Qty > 0"),
@@ -37,18 +41,8 @@ const saleFormSchema = z.object({
         party_id: z.string().uuid("Please select a recipient.").optional(),
         amount: z.coerce.number().gte(0).default(0),
     }).optional(),
-}).refine(data => {
-    if (data.settlement?.party_id && (data.settlement?.amount || 0) <= 0) {
-        return false;
-    }
-    return true;
-}, {
-    message: "Amount must be > 0 if recipient is selected.",
-    path: ["settlement", "amount"],
-}).refine(data => {
-    return !data.settlement || (data.settlement.amount || 0) <= data.payment.amount;
-}, {
-    message: "Settlement cannot exceed Amount Paid Now.",
+}).refine(data => !data.settlement || (data.settlement.amount || 0) <= data.payment.amount, {
+    message: "Settlement amount cannot exceed Amount Paid Now.",
     path: ["settlement", "amount"],
 });
 type SaleFormValues = z.infer<typeof saleFormSchema>;
@@ -79,12 +73,16 @@ const createQuickBill = async (values: SaleFormValues) => {
 export default function SalesPage() {
     const queryClient = useQueryClient();
     const { toast } = useToast();
-    const { data: parties, refetch: refetchParties } = useQuery({ queryKey: ['parties'], queryFn: getParties });
+    const { data: parties } = useQuery({ queryKey: ['parties'], queryFn: getParties });
     const { data: products } = useQuery({ queryKey: ['products'], queryFn: getProducts });
     
     const form = useForm<SaleFormValues>({
         resolver: zodResolver(saleFormSchema),
-        defaultValues: { items: [{ product_id: "", qty: 1, price_per_unit: 0 }], payment: { amount: 0, method: "cash" } },
+        defaultValues: {
+            created_at: new Date(),
+            items: [{ product_id: "", qty: 1, price_per_unit: 0 }],
+            payment: { amount: 0, method: "cash" }
+        },
     });
     
     const { fields, append, remove } = useFieldArray({ control: form.control, name: "items" });
@@ -93,8 +91,8 @@ export default function SalesPage() {
     const watchedPaymentAmount = useWatch({ control: form.control, name: "payment.amount" });
     const subtotal = React.useMemo(() => watchedItems.reduce((acc, item) => acc + ((item.qty || 0) * (item.price_per_unit || 0)), 0), [watchedItems]);
     const partyDetails = React.useMemo(() => parties?.find(p => p.id === watchedPartyId), [parties, watchedPartyId]);
-    const openingBalance = 0;
-    const finalBalance = subtotal + openingBalance - (watchedPaymentAmount || 0);
+    const currentBalance = partyDetails?.balance || 0;
+    const finalBalance = subtotal + currentBalance - (watchedPaymentAmount || 0);
 
     const mainMutation = useMutation({
         mutationFn: createQuickBill,
@@ -106,7 +104,7 @@ export default function SalesPage() {
         onError: (error) => toast({ title: "Error", description: error.message, variant: "destructive" })
     });
 
-    const partyCreateMutation = useMutation({
+    const customerCreateMutation = useMutation({
         mutationFn: (name: string) => fetch('/api/parties', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -115,7 +113,7 @@ export default function SalesPage() {
         onSuccess: (newParty: Party) => {
             toast({ title: "Success!", description: `Customer "${newParty.name}" created.` });
             queryClient.setQueryData(['parties'], (oldData: Party[] | undefined) => {
-                const enhancedNewParty = { ...newParty, total_purchases: 0, total_sales: 0 };
+                const enhancedNewParty = { ...newParty, total_purchases: 0, total_sales: 0, balance: newParty.opening_balance };
                 return oldData ? [...oldData, enhancedNewParty] : [enhancedNewParty];
             });
             form.setValue('party_id', newParty.id);
@@ -132,7 +130,7 @@ export default function SalesPage() {
         onSuccess: (newParty: Party) => {
             toast({ title: "Success!", description: `Recipient "${newParty.name}" created.` });
             queryClient.setQueryData(['parties'], (oldData: Party[] | undefined) => {
-                const enhancedNewParty = { ...newParty, total_purchases: 0, total_sales: 0 };
+                const enhancedNewParty = { ...newParty, total_purchases: 0, total_sales: 0, balance: newParty.opening_balance };
                 return oldData ? [...oldData, enhancedNewParty] : [enhancedNewParty];
             });
             form.setValue('settlement.party_id', newParty.id);
@@ -153,9 +151,24 @@ export default function SalesPage() {
             <Form {...form}>
                 <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
                     <h1 className="text-3xl font-bold">Sales Entry</h1>
-                    <Card><CardHeader><CardTitle>Customer Details</CardTitle></CardHeader><CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-                        <div className="md:col-span-2"><FormField control={form.control} name="party_id" render={({ field }) => ( <FormItem><FormLabel>Customer Name *</FormLabel><CreatableCombobox options={customerOptions} onCreate={(name) => partyCreateMutation.mutate(name)} {...field} placeholder="Type or select a customer..." /><FormMessage /></FormItem> )} /></div>
+                    <Card><CardHeader><CardTitle>Customer & Bill Details</CardTitle></CardHeader><CardContent className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
+                        <FormField control={form.control} name="party_id" render={({ field }) => ( <FormItem><FormLabel>Customer Name *</FormLabel><CreatableCombobox options={customerOptions} onCreate={(name) => customerCreateMutation.mutate(name)} {...field} placeholder="Type or select a customer..." /><FormMessage /></FormItem> )} />
                         <FormField control={form.control} name="bill_no" render={({ field }) => ( <FormItem><FormLabel>Bill / Invoice No</FormLabel><FormControl><Input placeholder="Optional" {...field} /></FormControl><FormMessage /></FormItem> )} />
+                        <FormField control={form.control} name="created_at" render={({ field }) => (
+                            <FormItem className="flex flex-col"><FormLabel>Bill Date</FormLabel>
+                                <Popover>
+                                    <PopoverTrigger asChild><FormControl><Button variant={"outline"} className={cn("pl-3 text-left font-normal", !field.value && "text-muted-foreground")}>
+                                        {field.value ? format(field.value, "PPP") : <span>Pick a date</span>}
+                                        <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                                    </Button></FormControl></PopoverTrigger>
+                                    <PopoverContent className="w-auto p-0" align="start"><Calendar mode="single" selected={field.value} onSelect={field.onChange} initialFocus /></PopoverContent>
+                                </Popover>
+                            <FormMessage /></FormItem>
+                        )} />
+                        <div className="space-y-2">
+                            <FormLabel>Customer's Current Balance</FormLabel>
+                            <Input readOnly value={`${new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(Math.abs(currentBalance))} ${currentBalance < 0 ? 'Cr (Credit)' : 'Dr (Debit)'}`} className="font-medium bg-muted" />
+                        </div>
                     </CardContent></Card>
                     <Card><CardHeader><CardTitle>Items</CardTitle></CardHeader><CardContent className="space-y-4">
                         {fields.map((field, index) => (
@@ -189,8 +202,8 @@ export default function SalesPage() {
                             <CardHeader><CardTitle>Summary</CardTitle></CardHeader>
                             <CardContent className="space-y-2 text-sm">
                                 <div className="flex justify-between"><span>Subtotal</span><span>{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(subtotal)}</span></div>
-                                <div className="flex justify-between"><span>Customer's Opening Balance</span><span>{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(openingBalance)}</span></div>
-                                <div className="flex justify-between font-semibold border-t pt-2 mt-2"><span>Total Due Before Payment</span><span>{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(subtotal + openingBalance)}</span></div>
+                                <div className="flex justify-between"><span>Current Balance</span><span>{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(currentBalance)}</span></div>
+                                <div className="flex justify-between font-semibold border-t pt-2 mt-2"><span>Total Due Before Payment</span><span>{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(subtotal + currentBalance)}</span></div>
                                 <div className="flex justify-between text-green-600"><span>Amount Paid Now</span><span>-{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(watchedPaymentAmount || 0)}</span></div>
                                 <div className="flex justify-between text-base font-bold border-t pt-2 mt-2"><span>Final Balance Due</span><span>{new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(finalBalance)}</span></div>
                             </CardContent>
