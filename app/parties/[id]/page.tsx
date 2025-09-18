@@ -1,97 +1,95 @@
-'use client'
-import { useQuery } from '@tanstack/react-query';
-import { useParams } from 'next/navigation';
+import { createClient } from '@/lib/supabase/server';
+import { notFound } from 'next/navigation';
 import { format } from 'date-fns';
+import Link from 'next/link';
 
-const fetchPartyDetails = async (id: string) => {
-    const res = await fetch(`/api/parties/${id}`);
-    if (!res.ok) throw new Error('Failed to fetch party details');
-    return res.json();
-};
+const currency = (n: number) => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(n || 0);
 
-export default function PartyDetailPage() {
-    const params = useParams();
-    const id = params.id as string;
+export default async function PartyDetailPage({ params }: { params: { id: string } }) {
+  const supabase = await createClient();
+  const supplierId = params.id;
 
-    const { data, isLoading, isError } = useQuery({
-        queryKey: ['party', id],
-        queryFn: () => fetchPartyDetails(id),
-        enabled: !!id,
-    });
+  const { data: supplier } = await supabase
+    .from('suppliers')
+    .select('*')
+    .eq('id', supplierId)
+    .single();
 
-    if (isLoading) return <div>Loading details...</div>;
-    if (isError) return <div>Error loading details.</div>;
+  if (!supplier) {
+    notFound();
+  }
 
-    const { party, stock_moves, payments, balance } = data;
+  // THE FIX IS HERE: We now explicitly tell Supabase which relationship to use
+  const { data: purchases } = await supabase
+    .from('stock_moves')
+    .select('*, products!stock_moves_product_id_fkey(name, size)') // This line is changed
+    .eq('supplier_id', supplierId)
+    .order('ts', { ascending: false });
 
-    const allTransactions = [...(stock_moves || []), ...(payments || [])]
-        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  const { data: payments } = await supabase
+    .from('payments')
+    .select('*')
+    .eq('supplier_id', supplierId)
+    .order('ts', { ascending: false });
 
-    return (
-        <div>
-            <h1 className="text-3xl font-bold">{party.name}</h1>
-            <p className="text-lg text-muted-foreground">{party.role}</p>
-            <div className="my-6 p-4 border rounded-lg bg-secondary">
-                <h2 className="text-2xl font-bold">
-                    Current Balance: {' '}
-                    <span className={balance >= 0 ? 'text-red-600' : 'text-green-600'}>
-                        {new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR" }).format(Math.abs(balance))}
-                        {balance > 0 ? ' (You are owed)' : balance < 0 ? ' (You owe)' : ''}
-                    </span>
-                </h2>
-            </div>
-            
-            <h3 className="text-2xl font-bold mt-8 mb-4">Transaction History</h3>
-            <div className="border rounded-lg">
-                <table className="w-full text-sm text-left">
-                    <thead className="bg-muted/50">
-                        <tr>
-                            <th className="p-4">Date</th>
-                            <th className="p-4">Type</th>
-                            <th className="p-4">Details</th>
-                            <th className="p-4 text-right">Debit (Billed / Paid Out)</th>
-                            <th className="p-4 text-right">Credit (Purchased / Paid In)</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {allTransactions.map((tx: any) => {
-                                let type = tx.notes || '';
-                                let details = '';
-                                let debit = 0;
-                                let credit = 0;
-                                
-                                if (tx.kind === 'sale') {
-                                    type = 'Sale';
-                                    debit = tx.total_amount;
-                                    details = `${tx.quantity} ${tx.product_unit || 'units'} of ${tx.product_name || 'Product'} @ ₹${tx.price_per_unit}`;
-                                } else if (tx.kind === 'purchase') {
-                                    type = 'Purchase';
-                                    credit = tx.total_amount;
-                                    details = `${tx.quantity} ${tx.product_unit || 'units'} of ${tx.product_name || 'Product'} @ ₹${tx.price_per_unit}`;
-                                } else if (tx.direction === 'in') {
-                                    type = 'Payment Received';
-                                    credit = tx.amount;
-                                    details = tx.notes || tx.method;
-                                } else if (tx.direction === 'out') {
-                                    type = 'Payment Made';
-                                    debit = tx.amount;
-                                    details = tx.notes || tx.method;
-                                }
+  const history = [
+    ...(purchases || []).map(p => ({ ...p, type: 'Purchase', date: p.ts })),
+    ...(payments || []).map(p => ({ ...p, type: 'Payment', date: p.ts }))
+  ].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-                                return (
-                                <tr key={tx.id} className="border-b">
-                                    <td className="p-4 text-muted-foreground">{format(new Date(tx.created_at), 'dd MMM, yyyy')}</td>
-                                    <td className="p-4 font-medium">{type}</td>
-                                    <td className="p-4">{details}</td>
-                                    <td className="p-4 text-right text-red-600">{debit > 0 ? `₹${debit.toLocaleString('en-IN')}` : ''}</td>
-                                    <td className="p-4 text-right text-green-600">{credit > 0 ? `₹${credit.toLocaleString('en-IN')}` : ''}</td>
-                                </tr>
-                                )
-                            })
-                        }
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    );
+  return (
+    <div className="space-y-6">
+      <div>
+        <Link href="/parties" className="text-blue-600 hover:underline mb-4 inline-block">&larr; Back to Parties List</Link>
+        <h1 className="text-3xl font-bold">{supplier.name}</h1>
+        <p className="text-gray-600">{supplier.phone}</p>
+        <p className="text-gray-600">{supplier.address}</p>
+      </div>
+
+      <div className="bg-white rounded-lg shadow overflow-hidden">
+        <h2 className="text-xl font-semibold p-6">Transaction History</h2>
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Details</th>
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {history.map((item: any) => (
+              <tr key={`${item.type}-${item.id}`}>
+                <td className="px-6 py-4">{format(new Date(item.date), 'dd MMM, yyyy')}</td>
+                <td className="px-6 py-4">
+                  <span className={`px-2 inline-flex text-xs leading-5 font-semibold rounded-full ${
+                    item.type === 'Purchase' ? 'bg-blue-100 text-blue-800' : 'bg-green-100 text-green-800'
+                  }`}>
+                    {item.type}
+                  </span>
+                </td>
+                <td className="px-6 py-4 font-medium">
+                  {item.type === 'Purchase' 
+                    // This line is also updated to access the product name correctly
+                    ? `${item.qty} units of ${item.products?.name || 'Product'} @ ${currency(item.price_per_unit)}`
+                    : `Payment via ${item.method} ${item.instrument_ref || ''}`
+                  }
+                </td>
+                <td className="px-6 py-4 text-right">
+                  {currency(item.type === 'Purchase' ? item.qty * item.price_per_unit : item.amount)}
+                </td>
+              </tr>
+            ))}
+             {history.length === 0 && (
+                <tr>
+                    <td colSpan={4} className="text-center p-4 text-gray-500">
+                        No transactions found for this party.
+                    </td>
+                </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
 }

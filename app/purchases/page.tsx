@@ -1,271 +1,340 @@
 "use client";
 
-import { useState } from "react";
+import React, { useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 import CreatableSelect from "react-select/creatable";
-import AsyncSelect from "react-select/async";
-import { supabase } from "@/lib/supabase/client";
-import toast from "react-hot-toast";
+import { PlusCircle, Trash2 } from "lucide-react";
 
-type PurchaseItem = {
-  productId: number | null;
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+const CreatableSelectComponent = CreatableSelect as any;
+
+type SelectOption = { value: string; label: string; __isNew__?: boolean };
+type ItemRow = {
+  id: number;
+  material: string;
+  size: string;
+  product: SelectOption | null;
+  unit: string;
   qty: number;
-  rate: number;
-  amount: number;
+  rate: number | "";
 };
 
 export default function PurchasesPage() {
-  const [supplierId, setSupplierId] = useState<number | null>(null);
+  const supabase = createClient();
+  const router = useRouter();
+
+  const [suppliers, setSuppliers] = useState<SelectOption[]>([]);
+  const [products, setProducts] = useState<SelectOption[]>([]);
+  const [selectedSupplier, setSelectedSupplier] = useState<SelectOption | null>(
+    null
+  );
   const [billNo, setBillNo] = useState("");
-  const [items, setItems] = useState<PurchaseItem[]>([
-    { productId: null, qty: 1, rate: 0, amount: 0 },
+  const [items, setItems] = useState<ItemRow[]>([
+    {
+      id: Date.now(),
+      material: "Tiles",
+      size: "",
+      product: null,
+      unit: "box",
+      qty: 1,
+      rate: "",
+    },
   ]);
-  const [amountPaid, setAmountPaid] = useState(0);
-  const [method, setMethod] = useState("cash");
-  const [paymentRef, setPaymentRef] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const [supplierOptions, setSupplierOptions] = useState<
-    { value: number; label: string }[]
-  >([]);
+  // Load suppliers & products
+  useEffect(() => {
+    const fetchData = async () => {
+      const { data: suppliersData } = await supabase
+        .from("suppliers")
+        .select("id, name");
+      if (suppliersData) {
+        setSuppliers(
+          suppliersData.map((s) => ({
+            value: s.id.toString(),
+            label: s.name,
+          }))
+        );
+      }
 
-  // ---------------- Load Suppliers ----------------
-  const loadSuppliers = async () => {
-    const { data, error } = await supabase.from("suppliers").select("id, name");
-    if (error) {
-      toast.error("Failed to load suppliers");
-      return [];
-    }
-    const options = data.map((s) => ({ value: s.id, label: s.name }));
-    setSupplierOptions(options);
-    return options;
+      const { data: productsData } = await supabase
+        .from("products")
+        .select("id, name, size, material, unit");
+      if (productsData) {
+        setProducts(
+          productsData.map((p) => ({
+            value: p.id.toString(),
+            label: `${p.name} (${p.size || "N/A"})`,
+          }))
+        );
+      }
+    };
+    fetchData();
+  }, [supabase]);
+
+  // Handlers
+  const addRow = () => {
+    setItems([
+      ...items,
+      {
+        id: Date.now(),
+        material: "Tiles",
+        size: "",
+        product: null,
+        unit: "box",
+        qty: 1,
+        rate: "",
+      },
+    ]);
   };
 
-  // ---------------- Load Products ----------------
-  const loadProducts = async () => {
-    const { data, error } = await supabase
-      .from("products")
-      .select("id, name, size, unit");
-    if (error) {
-      toast.error("Failed to load products");
-      return [];
-    }
-    return data.map((p) => ({
-      value: p.id,
-      label: `${p.name} (${p.size || ""} ${p.unit || ""})`,
-    }));
+  const removeRow = (id: number) => {
+    setItems(items.filter((i) => i.id !== id));
   };
 
-  // ---------------- Save Purchase ----------------
+  const updateItem = (id: number, field: keyof ItemRow, value: any) => {
+    setItems(
+      items.map((i) => (i.id === id ? { ...i, [field]: value } : i))
+    );
+  };
+
+  const subtotal = items.reduce(
+    (sum, i) => sum + i.qty * (Number(i.rate) || 0),
+    0
+  );
+
+  // Save
   const savePurchase = async () => {
-    if (!supplierId) {
-      toast.error("Please select a supplier");
+    if (!selectedSupplier) {
+      alert("⚠️ Please select a supplier");
       return;
     }
-    if (items.length === 0 || !items.some((i) => i.productId)) {
-      toast.error("Please add at least one valid product");
-      return;
-    }
+    setLoading(true);
 
     try {
-      const res = await fetch("/api/purchases", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          supplier_id: supplierId,
-          bill_no: billNo,
-          items: items.map((i) => ({
-            product_id: i.productId,
-            qty: i.qty,
-            price_per_unit: i.rate,
-          })),
-          payment:
-            amountPaid > 0
-              ? {
-                  method,
-                  amount: amountPaid,
-                  instrument_ref: paymentRef || null,
-                }
-              : null,
-        }),
-      });
+      // ✅ Handle supplier
+      let supplierId = selectedSupplier.value;
+      if (selectedSupplier.__isNew__) {
+        const { data, error } = await supabase
+          .from("suppliers")
+          .insert([{ name: selectedSupplier.label }])
+          .select("id")
+          .single();
+        if (error) throw error;
+        supplierId = data.id;
+      }
 
-      const result = await res.json();
+      // ✅ Handle products
+      const finalItems = [];
+      for (const i of items) {
+        let productId = i.product?.value;
+        if (i.product?.__isNew__) {
+          const { data, error } = await supabase
+            .from("products")
+            .insert([
+              {
+                name: i.product.label,
+                size: i.size,
+                material: i.material,
+                unit: i.unit,
+              },
+            ])
+            .select("id")
+            .single();
+          if (error) throw error;
+          productId = data.id;
+        }
+        finalItems.push({
+          product_id: productId,
+          qty: i.qty,
+          rate: Number(i.rate) || 0,
+          unit: i.unit,
+          size: i.size,
+          material: i.material,
+        });
+      }
 
-      if (!res.ok) throw new Error(result.error || "Failed to save purchase");
+      // ✅ Insert into stock_moves
+      const { error: purchaseError } = await supabase
+        .from("stock_moves")
+        .insert([
+          {
+            supplier_id: supplierId,
+            bill_no: billNo || null,
+            items: finalItems,
+          },
+        ]);
 
-      toast.success("Purchase saved successfully");
-      setSupplierId(null);
-      setBillNo("");
-      setItems([{ productId: null, qty: 1, rate: 0, amount: 0 }]);
-      setAmountPaid(0);
-      setPaymentRef("");
+      if (purchaseError) throw purchaseError;
+
+      alert("✅ Purchase saved successfully!");
+      router.push("/products");
     } catch (err: any) {
-      toast.error(err.message);
+      alert("❌ Save failed: " + err.message);
+    } finally {
+      setLoading(false);
     }
   };
 
-  // ---------------- Render ----------------
   return (
-    <div>
-      <h1 className="text-2xl font-bold mb-6">Purchase Entry</h1>
-
-      {/* Supplier Section */}
-      <div className="mb-4">
-        <label className="block font-semibold mb-2">Supplier Name *</label>
-        <CreatableSelect
-          cacheOptions
-          defaultOptions
-          loadOptions={loadSuppliers}
-          value={
-            supplierId
-              ? {
-                  value: supplierId,
-                  label:
-                    supplierOptions.find((s) => s.value === supplierId)
-                      ?.label || "",
-                }
-              : null
-          }
-          onChange={(val: any) => setSupplierId(val?.value || null)}
-          onCreateOption={async (inputValue) => {
-            if (!inputValue.trim()) {
-              toast.error("Supplier name cannot be empty");
-              return;
-            }
-            const { data, error } = await supabase
-              .from("suppliers")
-              .insert([{ name: inputValue.trim() }])
-              .select();
-            if (error || !data || data.length === 0) {
-              toast.error("Failed to create supplier");
-              return;
-            }
-            const supplier = data[0];
-            toast.success(`Supplier "${supplier.name}" created.`);
-            setSupplierId(supplier.id);
-            setSupplierOptions((prev) => [
-              ...prev,
-              { value: supplier.id, label: supplier.name },
-            ]);
-          }}
-        />
-      </div>
-
-      {/* Bill No */}
-      <div className="mb-6">
-        <label className="block font-semibold mb-2">Purchase Bill No</label>
-        <input
-          type="text"
-          value={billNo}
-          onChange={(e) => setBillNo(e.target.value)}
-          className="border rounded px-3 py-2 w-full"
-          placeholder="Optional"
-        />
-      </div>
-
-      {/* Items Section */}
-      <h2 className="font-semibold mb-2">Items</h2>
-      {items.map((item, idx) => (
-        <div key={idx} className="flex gap-2 mb-2">
-          <div className="flex-1">
-            <AsyncSelect
-              cacheOptions
-              defaultOptions
-              loadOptions={loadProducts}
-              onChange={(val: any) => {
-                const updated = [...items];
-                updated[idx].productId = val?.value || null;
-                setItems(updated);
-              }}
+    <div className="p-6 max-w-6xl mx-auto space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle>Supplier & Bill</CardTitle>
+        </CardHeader>
+        <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <div>
+            <Label>Supplier *</Label>
+            <CreatableSelectComponent
+              options={suppliers}
+              value={selectedSupplier}
+              onChange={setSelectedSupplier}
+              placeholder="Type or select a supplier..."
             />
           </div>
-          <input
-            type="number"
-            value={item.qty}
-            min={1}
-            onChange={(e) => {
-              const qty = parseFloat(e.target.value) || 0;
-              const updated = [...items];
-              updated[idx].qty = qty;
-              updated[idx].amount = qty * updated[idx].rate;
-              setItems(updated);
-            }}
-            className="w-20 border rounded px-2"
-          />
-          <input
-            type="number"
-            value={item.rate}
-            min={0}
-            onChange={(e) => {
-              const rate = parseFloat(e.target.value) || 0;
-              const updated = [...items];
-              updated[idx].rate = rate;
-              updated[idx].amount = rate * updated[idx].qty;
-              setItems(updated);
-            }}
-            className="w-24 border rounded px-2"
-          />
-          <input
-            type="number"
-            value={item.amount}
-            readOnly
-            className="w-24 border rounded px-2 bg-gray-100"
-          />
-          <button
-            type="button"
-            className="bg-red-500 text-white px-2 rounded"
-            onClick={() => setItems(items.filter((_, i) => i !== idx))}
-          >
-            ✕
-          </button>
-        </div>
-      ))}
-      <button
-        type="button"
-        onClick={() =>
-          setItems([...items, { productId: null, qty: 1, rate: 0, amount: 0 }])
-        }
-        className="bg-blue-500 text-white px-3 py-1 rounded"
-      >
-        + Add Row
-      </button>
+          <div>
+            <Label>Bill / Invoice No</Label>
+            <Input
+              value={billNo}
+              onChange={(e) => setBillNo(e.target.value)}
+              placeholder="Optional"
+            />
+          </div>
+        </CardContent>
+      </Card>
 
-      {/* Payment Section */}
-      <div className="mt-6">
-        <h2 className="font-semibold mb-2">Payment to Supplier (Optional)</h2>
-        <input
-          type="number"
-          value={amountPaid}
-          onChange={(e) => setAmountPaid(parseFloat(e.target.value) || 0)}
-          className="border rounded px-3 py-2 w-full mb-2"
-          placeholder="Amount Paid Now"
-        />
-        <select
-          value={method}
-          onChange={(e) => setMethod(e.target.value)}
-          className="border rounded px-3 py-2 w-full mb-2"
-        >
-          <option value="cash">Cash</option>
-          <option value="bank">Bank</option>
-          <option value="upi">UPI</option>
-          <option value="cheque">Cheque</option>
-        </select>
-        <input
-          type="text"
-          value={paymentRef}
-          onChange={(e) => setPaymentRef(e.target.value)}
-          className="border rounded px-3 py-2 w-full"
-          placeholder="e.g., UPI ID, Cheque No."
-        />
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Items</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {items.map((item) => (
+            <div
+              key={item.id}
+              className="grid grid-cols-12 gap-3 items-center"
+            >
+              <div className="col-span-2">
+                <Select
+                  value={item.material}
+                  onValueChange={(val) =>
+                    updateItem(item.id, "material", val)
+                  }
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Material" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Tiles">Tiles</SelectItem>
+                    <SelectItem value="Granite">Granite</SelectItem>
+                    <SelectItem value="Other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="col-span-2">
+                <Input
+                  placeholder="e.g., 600x600"
+                  value={item.size}
+                  onChange={(e) =>
+                    updateItem(item.id, "size", e.target.value)
+                  }
+                />
+              </div>
+              <div className="col-span-3">
+                <CreatableSelectComponent
+                  options={products}
+                  value={item.product}
+                  onChange={(val: any) =>
+                    updateItem(item.id, "product", val)
+                  }
+                  placeholder="Select or add product"
+                />
+              </div>
+              <div className="col-span-1">
+                <Select
+                  value={item.unit}
+                  onValueChange={(val) => updateItem(item.id, "unit", val)}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="box">Box</SelectItem>
+                    <SelectItem value="sq_ft">Sq Ft</SelectItem>
+                    <SelectItem value="liters">Liters</SelectItem>
+                    <SelectItem value="bags">Bags</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="col-span-1">
+                <Input
+                  type="number"
+                  value={item.qty}
+                  onChange={(e) =>
+                    updateItem(item.id, "qty", Number(e.target.value))
+                  }
+                />
+              </div>
+              <div className="col-span-1">
+                <Input
+                  type="number"
+                  value={item.rate}
+                  onChange={(e) =>
+                    updateItem(
+                      item.id,
+                      "rate",
+                      e.target.value === ""
+                        ? ""
+                        : Number(e.target.value)
+                    )
+                  }
+                />
+              </div>
+              <div className="col-span-1 text-right font-semibold">
+                ₹{item.qty * (Number(item.rate) || 0)}
+              </div>
+              <div className="col-span-1">
+                <Button
+                  variant="destructive"
+                  size="icon"
+                  onClick={() => removeRow(item.id)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+          ))}
+          <Button variant="outline" onClick={addRow}>
+            <PlusCircle className="mr-2 h-4 w-4" /> Add Row
+          </Button>
+        </CardContent>
+      </Card>
 
-      {/* Save Button */}
-      <div className="mt-6">
-        <button
-          onClick={savePurchase}
-          className="bg-green-600 text-white px-4 py-2 rounded"
-        >
-          Save Purchase
-        </button>
+      <Card>
+        <CardHeader>
+          <CardTitle>Summary</CardTitle>
+        </CardHeader>
+        <CardContent className="text-lg font-semibold flex justify-between">
+          <span>Subtotal</span>
+          <span>₹{subtotal}</span>
+        </CardContent>
+      </Card>
+
+      <div className="flex justify-end">
+        <Button onClick={savePurchase} disabled={loading}>
+          {loading ? "Saving..." : "Save Purchase"}
+        </Button>
       </div>
     </div>
   );

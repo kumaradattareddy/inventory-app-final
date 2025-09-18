@@ -1,46 +1,103 @@
-// File: app/products/page.tsx
-'use client'
+"use client"; // This line makes it a Client Component
 
-import { useQuery } from "@tanstack/react-query"
-import { columns, Product } from "./columns"
-import { DataTable } from "@/components/ui/data-table"
-import AddProductDialog from "./AddProductDialog"
-import { Toaster } from "@/components/ui/toaster"
+import { useState, useEffect } from 'react';
+import { createClient } from '@/lib/supabase/client'; // Use the client-side createClient
 
-// The function to fetch data from our API
-async function getProducts(): Promise<Product[]> {
-    const res = await fetch('/api/products')
-    if (!res.ok) {
-      throw new Error('Failed to fetch products')
-    }
-    return res.json()
-}
+// Define a type for the data returned by your function
+type ProductInventoryInfo = {
+  id: number;
+  name: string | null;
+  material: string | null;
+  size: string | null;
+  unit: string | null;
+  current_stock: number;
+  supplier_name: string | null;
+};
 
 export default function ProductsPage() {
-  const { data, isLoading, isError, error } = useQuery({
-      queryKey: ['products'], // This key is used for caching
-      queryFn: getProducts
-  })
+  const [products, setProducts] = useState<ProductInventoryInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState(''); // State to hold the search input
 
-  if (isLoading) return <div>Loading products...</div>
-  if (isError) return <div>Error: {error.message}</div>
+  useEffect(() => {
+    const supabase = createClient();
+    const fetchProducts = async () => {
+      setLoading(true);
+      const { data, error } = await supabase.rpc('get_products_with_details');
+      if (error) {
+        console.error("Error fetching product details:", error);
+      } else {
+        setProducts(data || []);
+      }
+      setLoading(false);
+    };
+    fetchProducts();
+  }, []);
+
+  // Filter the products based on the search query
+  const filteredProducts = products.filter(product =>
+    product.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    product.material?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    product.supplier_name?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const totalProducts = filteredProducts.length;
 
   return (
-    <div className="container mx-auto py-2">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold">Products</h1>
-        <AddProductDialog />
-      </div>
-      <DataTable columns={columns} data={data || []} />
+    <div className="space-y-6">
+      <h1 className="text-3xl font-bold">Product Inventory</h1>
 
-      {/* ✨ NEW: Add the total product count below the table */}
-      <div className="flex items-center justify-end space-x-2 py-4">
-        <div className="text-sm font-medium text-muted-foreground">
-          Total Products: {data?.length || 0}
+      <div className="bg-white rounded-lg shadow overflow-hidden">
+        <div className="p-6 flex justify-between items-center">
+            <h2 className="text-xl font-semibold">Live Stock Report</h2>
+            {/* The Search Bar */}
+            <input 
+              type="text"
+              placeholder="Search by name, material, supplier..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="px-4 py-2 border rounded-md w-1/3"
+            />
+        </div>
+        <table className="min-w-full divide-y divide-gray-200">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Material</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Size</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Last Supplier</th>
+              <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Current Stock</th>
+            </tr>
+          </thead>
+          <tbody className="bg-white divide-y divide-gray-200">
+            {loading ? (
+              <tr><td colSpan={5} className="text-center p-4">Loading...</td></tr>
+            ) : (
+              filteredProducts.map((product: ProductInventoryInfo) => (
+                <tr key={product.id}>
+                  <td className="px-6 py-4 whitespace-nowrap font-medium">{product.name || 'N/A'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap">{product.material || 'N/A'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap">{product.size || 'N/A'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap">{product.supplier_name || 'N/A'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-right font-semibold">
+                    {product.current_stock} {product.unit}
+                  </td>
+                </tr>
+              ))
+            )}
+            {(!loading && totalProducts === 0) && (
+                <tr>
+                    <td colSpan={5} className="text-center p-4 text-gray-500">
+                        {searchQuery ? 'No products match your search.' : 'No inventory found.'}
+                    </td>
+                </tr>
+            )}
+          </tbody>
+        </table>
+        <div className="p-4 text-right font-bold text-gray-700 bg-gray-50 border-t">
+          Showing: {totalProducts} Products
         </div>
       </div>
-
-      <Toaster />
     </div>
-  )
+  );
 }

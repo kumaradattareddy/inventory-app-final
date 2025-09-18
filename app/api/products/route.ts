@@ -1,56 +1,30 @@
-import { NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createAdminClient } from '@/lib/supabase/admin';
+import { NextResponse } from 'next/server';
 
-const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.SUPABASE_SERVICE_ROLE_KEY!
-);
-
-export async function GET() {
+export async function POST(request: Request) {
+  const supabase = createAdminClient();
   try {
-    const { data, error } = await supabase
-      .from("products")
-      .select("id, name, material, size, unit, opening_stock");
+    const { name, material, size, unit, opening_stock } = await request.json();
 
-    if (error) {
-      console.error("Error fetching products:", error);
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-
-    return NextResponse.json(data);
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
-  }
-}
-
-export async function POST(req: Request) {
-  try {
-    const body = await req.json();
-    const { name, material, size, unit, opening_stock } = body;
-
-    if (!name) {
-      return NextResponse.json({ error: "Product name is required" }, { status: 400 });
+    if (!name || opening_stock === undefined) {
+      return NextResponse.json({ error: 'Name and opening_stock are required fields.' }, { status: 400 });
     }
 
     const { data, error } = await supabase
-      .from("products")
-      .insert({
-        name,
-        material: material || null,
-        size: size || null,
-        unit: unit || null,
-        opening_stock: opening_stock || 0,
-      })
+      .from('products')
+      .insert({ name, material, size, unit, opening_stock })
       .select()
       .single();
 
     if (error) {
-      console.error("Error creating product:", error);
+      console.error("Supabase error creating product:", error);
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    return NextResponse.json(data);
-  } catch (err: any) {
-    return NextResponse.json({ error: err.message }, { status: 500 });
+    return NextResponse.json({ message: 'Product created successfully!', product: data });
+
+  } catch (error: any) {
+    console.error('API Error:', error);
+    return NextResponse.json({ error: 'An unexpected error occurred.' }, { status: 500 });
   }
 }
