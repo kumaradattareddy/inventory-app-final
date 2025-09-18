@@ -1,81 +1,72 @@
-// File: app/api/purchases/quick-bill/route.ts (CORRECTED)
-import { createClient } from '@/lib/supabase/server';
-// ✨ FIX: Import NextRequest from next/server
-import { NextResponse, NextRequest } from 'next/server';
-import { z } from 'zod';
-import { addProductSchema } from '@/lib/schemas';
+import { NextResponse } from "next/server";
+import { createServerSupabase } from "@/lib/supabase/server";
+const supabase = createServerSupabase();
 
-const purchaseItemSchema = z.object({
-  name: z.string().min(1),
-  material: z.string().optional(),
-  size: z.string().optional(),
-  unit: z.string().min(1),
-  qty: z.coerce.number().gt(0),
-  price_per_unit: z.coerce.number().gte(0),
-});
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const { supplier_id, bill_no, items, payment } = body;
 
-const quickPurchaseSchema = z.object({
-    party_id: z.string().uuid(),
-    bill_no: z.string().optional(),
-    items: z.array(purchaseItemSchema).min(1),
-});
-export const dynamic = 'force-dynamic';
-
-// ✨ FIX: Use the NextRequest type for the 'request' parameter
-export async function POST(request: NextRequest) {
-    const supabase = createClient();
-    const body = await request.json();
-
-    const validated = quickPurchaseSchema.safeParse(body);
-    if (!validated.success) {
-        return NextResponse.json({ error: validated.error.flatten() }, { status: 400 });
+    if (!supplier_id || !items || items.length === 0) {
+      return NextResponse.json(
+        { error: "Supplier and at least one item required" },
+        { status: 400 }
+      );
     }
-    
-    const { party_id, bill_no, items } = validated.data;
 
-    try {
-        const resolvedItems = await Promise.all(items.map(async (item) => {
-            const productPayload = {
-                name: item.name,
-                material: item.material,
-                size: item.size,
-                unit: item.unit
-            };
+    // 1. Insert purchase into stock_moves
+    const stockMoveInserts = items.map((it: any) => ({
+      supplier_id,
+      product_id: it.product_id,
+      qty: it.qty,
+      price_per_unit: it.price_per_unit,
+      kind: "purchase",
+      notes: bill_no || null,
+    }));
 
-            // Now this line will work correctly
-            const productRes = await fetch(`${request.nextUrl.origin}/api/products`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(productPayload),
-            });
+    const { data: moves, error: movesError } = await supabase
+      .from("stock_moves")
+      .insert(stockMoveInserts)
+      .select();
 
-            if (!productRes.ok) {
-                throw new Error(`Failed to find or create product: ${item.name}`);
-            }
-            const { id: product_id } = await productRes.json();
-
-            return {
-                product_id,
-                qty: item.qty,
-                price_per_unit: item.price_per_unit
-            };
-        }));
-
-        const { error: rpcError } = await supabase.rpc('create_new_purchase', {
-            party_id_input: party_id,
-            bill_no_input: bill_no,
-            items: resolvedItems,
-            payment_amount_input: 0, 
-            payment_method_input: 'cash',
-            payment_ref_input: '',
-        });
-
-        if (rpcError) throw rpcError;
-
-        return NextResponse.json({ success: true, message: "Purchase created successfully." });
-
-    } catch (error: any) {
-        console.error("Error in purchase creation process:", error);
-        return NextResponse.json({ error: error.message }, { status: 500 });
+    if (movesError) {
+      return NextResponse.json(
+        { error: movesError.message },
+        { status: 400 }
+      );
     }
+
+    // 2. Optional payment
+    let paymentRow = null;
+    if (payment && payment.amount > 0) {
+      const { data: pay, error: payError } = await supabase
+        .from("payments")
+        .insert({
+          supplier_id,
+          amount: payment.amount,
+          method: payment.method,
+          instrument_ref: payment.instrument_ref || null,
+          notes: bill_no || null,
+          direction: "out", // money goes to supplier
+        })
+        .select()
+        .single();
+
+      if (payError) {
+        return NextResponse.json(
+          { error: payError.message },
+          { status: 400 }
+        );
+      }
+      paymentRow = pay;
+    }
+
+    return NextResponse.json({
+      success: true,
+      purchases: moves,
+      payment: paymentRow,
+    });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
+  }
 }

@@ -1,81 +1,56 @@
-// File: app/api/products/route.ts (UPGRADED with robust find-or-create)
-import { createClient } from '@/lib/supabase/server';
-import { NextResponse } from 'next/server';
-import { addProductSchema } from '@/lib/schemas';
+import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 
-export const dynamic = 'force-dynamic';
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
 
-// GET handler is unchanged
 export async function GET() {
-  const supabase = createClient();
-  const { data, error } = await supabase
-    .from('products')
-    .select('*')
-    .is('archived_at', null)
-    .order('name');
-  if (error) {
-    console.error("Error fetching products:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+  try {
+    const { data, error } = await supabase
+      .from("products")
+      .select("id, name, material, size, unit, opening_stock");
+
+    if (error) {
+      console.error("Error fetching products:", error);
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json(data);
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
-  return NextResponse.json(data);
 }
 
+export async function POST(req: Request) {
+  try {
+    const body = await req.json();
+    const { name, material, size, unit, opening_stock } = body;
 
-// POST handler now has smarter search logic
-export async function POST(request: Request) {
-  const supabase = createClient();
-  const body = await request.json();
-  
-  const validated = addProductSchema.safeParse(body);
-  if (!validated.success) {
-    return NextResponse.json({ error: validated.error.flatten() }, { status: 400 });
-  }
-  
-  const { name, material, size, unit } = validated.data;
+    if (!name) {
+      return NextResponse.json({ error: "Product name is required" }, { status: 400 });
+    }
 
-  // ✨ THIS IS THE ROBUST SEARCH LOGIC ✨
-  // We build the query step-by-step to correctly handle empty/null fields
-  let query = supabase
-    .from('products')
-    .select('id, name') // Select more fields for better debugging if needed
-    .eq('name', name)
-    .eq('unit', unit);
-
-  if (material && material.trim() !== "") {
-    query = query.eq('material', material);
-  } else {
-    query = query.is('material', null);
-  }
-
-  if (size && size.trim() !== "") {
-    query = query.eq('size', size);
-  } else {
-    query = query.is('size', null);
-  }
-
-  let { data: existingProduct, error: findError } = await query.maybeSingle();
-
-  if (findError) {
-    console.error("Error finding product:", findError);
-    return NextResponse.json({ error: "Failed to query for existing product." }, { status: 500 });
-  }
-
-  if (existingProduct) {
-    // If product exists, just return it
-    return NextResponse.json(existingProduct);
-  } else {
-    // If not found, create a new one
-    const { data: newProduct, error: insertError } = await supabase
-      .from('products')
-      .insert(validated.data)
-      .select('id, name')
+    const { data, error } = await supabase
+      .from("products")
+      .insert({
+        name,
+        material: material || null,
+        size: size || null,
+        unit: unit || null,
+        opening_stock: opening_stock || 0,
+      })
+      .select()
       .single();
 
-    if (insertError) {
-      // This is the duplicate error you were seeing. Now it should only happen in a true race condition.
-      console.error("Error creating product:", insertError);
-      return NextResponse.json({ error: insertError.message }, { status: 500 });
+    if (error) {
+      console.error("Error creating product:", error);
+      return NextResponse.json({ error: error.message }, { status: 500 });
     }
-    return NextResponse.json(newProduct);
+
+    return NextResponse.json(data);
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }
